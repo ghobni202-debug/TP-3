@@ -1,5 +1,5 @@
 $(document).ready(function() {
-    // تحميل المواد عند اختيار الفصل
+   
     $('#semesterSelect').change(function() {
         var semId = $(this).val();
         if (!semId) return;
@@ -17,7 +17,7 @@ $(document).ready(function() {
         }, 'json');
     });
     
-    // تحميل الطلاب عند اختيار المادة
+
     $('#courseSelect').change(function() {
         var semId = $('#semesterSelect').val();
         var courseId = $(this).val();
@@ -46,7 +46,7 @@ $(document).ready(function() {
         }, 'json');
     });
     
-    // حفظ الدرجات
+   
     $('#saveGradesBtn').click(function() {
         var semId = $('#semesterSelect').val();
         var courseId = $('#courseSelect').val();
