@@ -1,114 +1,90 @@
-<?php
-require_once __DIR__ . '/../config/config.php';
-require_once __DIR__ . '/../config/database.php';
-
-foreach (glob(__DIR__ . '/../models/*.php') as $file) {
-    require_once $file;
-}
-
-header('Content-Type: application/json');
-
-if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'professor') {
-    http_response_code(403);
-    echo json_encode(['error' => 'Forbidden']);
-    exit;
-}
-
-$professorId = $_SESSION['user_id'];
-$action = $_GET['action'] ?? $_POST['action'] ?? null;
-
-if ($_SERVER['REQUEST_METHOD'] === 'GET' && $action === 'courses') {
-    $semesterId = intval($_GET['semester_id']);
-    
-    $db = Database::getInstance()->getConnection();
-    $stmt = $db->prepare("
-        SELECT c.id, c.name 
-        FROM courses c
-        JOIN assignments a ON a.course_id = c.id
-        WHERE a.professor_id = ? AND a.semester_id = ?
-    ");
-    $stmt->execute([$professorId, $semesterId]);
-    $courses = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    echo json_encode($courses);
-    
-} elseif ($_SERVER['REQUEST_METHOD'] === 'GET' && $action === 'students') {
-    $semesterId = intval($_GET['semester_id']);
-    $courseId = intval($_GET['course_id']);
-    
-  
-    $db = Database::getInstance()->getConnection();
-    $stmt = $db->prepare("
-        SELECT id FROM assignments 
-        WHERE professor_id = ? AND course_id = ? AND semester_id = ?
-    ");
-    $stmt->execute([$professorId, $courseId, $semesterId]);
-    if (!$stmt->fetch()) {
-        http_response_code(403);
-        echo json_encode(['error' => 'Forbidden']);
-        exit;
-    }
-    
-    
-    $stmt = $db->prepare("
-        SELECT u.id, u.name 
-        FROM users u
-        JOIN enrollments e ON e.student_id = u.id
-        WHERE e.semester_id = ?
-        ORDER BY u.name
-    ");
-    $stmt->execute([$semesterId]);
-    $students = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    
-    foreach ($students as &$student) {
-        $stmt = $db->prepare("
-            SELECT grade FROM grades 
-            WHERE student_id = ? AND course_id = ? AND semester_id = ?
-        ");
-        $stmt->execute([$student['id'], $courseId, $semesterId]);
-        $grade = $stmt->fetch(PDO::FETCH_ASSOC);
-        $student['grade'] = $grade ? floatval($grade['grade']) : null;
-    }
-    
-    echo json_encode($students);
-    
-} elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && $action === 'save') {
-    $semesterId = intval($_POST['semester_id']);
-    $courseId = intval($_POST['course_id']);
-    $grades = $_POST['grades'] ?? [];
-    
-    $db = Database::getInstance()->getConnection();
-    $stmt = $db->prepare("
-        SELECT id FROM assignments 
-        WHERE professor_id = ? AND course_id = ? AND semester_id = ?
-    ");
-    $stmt->execute([$professorId, $courseId, $semesterId]);
-    if (!$stmt->fetch()) {
-        http_response_code(403);
-        echo json_encode(['error' => 'Forbidden']);
-        exit;
-    }
-    
-    $saved = 0;
-    $validGrades = ['0.0', '1.0', '2.0', '3.0', '4.0'];
-    
-    foreach ($grades as $entry) {
-        $studentId = intval($entry['student_id']);
-        $grade = floatval($entry['grade']);
+$(document).ready(function() {
+    // تحميل المواد عند اختيار الفصل
+    $('#semesterSelect').change(function() {
+        var semId = $(this).val();
+        if (!semId) return;
         
-        if (!in_array($entry['grade'], $validGrades)) {
-            continue;
-        }
+        $.get('api/grades.php', {
+            action: 'courses',
+            semester_id: semId
+        }, function(data) {
+            var opts = '<option value="">-- Select course --</option>';
+            $.each(data, function(i, course) {
+                opts += '<option value="' + course.id + '">' + course.name + '</option>';
+            });
+            $('#courseSelect').html(opts).prop('disabled', false);
+            $('#gradeTable').hide();
+        }, 'json');
+    });
+    
+    // تحميل الطلاب عند اختيار المادة
+    $('#courseSelect').change(function() {
+        var semId = $('#semesterSelect').val();
+        var courseId = $(this).val();
+        if (!semId || !courseId) return;
         
-        Grade::upsert($studentId, $courseId, $semesterId, $professorId, $grade);
-        GpaRecord::recompute($studentId, $semesterId);
-        $saved++;
+        $.get('api/grades.php', {
+            action: 'students',
+            semester_id: semId,
+            course_id: courseId
+        }, function(students) {
+            var html = '<thead><tr><th>Student Name</th><th>Student ID</th><th>Grade</th></tr></thead><tbody>';
+            $.each(students, function(i, s) {
+                var gradeVal = s.grade !== null ? s.grade : '';
+                html += '<tr>' +
+                    '<td>' + s.name + '</td>' +
+                    '<td>' + s.id + '</td>' +
+                    '<td>' +
+                    '<select class="form-select grade-input" data-student="' + s.id + '">' +
+                    buildGradeOptions(gradeVal) +
+                    '</select>' +
+                    '</td>' +
+                    '</tr>';
+            });
+            html += '</tbody>';
+            $('#gradeTable').html(html).show();
+        }, 'json');
+    });
+    
+    // حفظ الدرجات
+    $('#saveGradesBtn').click(function() {
+        var semId = $('#semesterSelect').val();
+        var courseId = $('#courseSelect').val();
+        var grades = [];
+        
+        $('.grade-input').each(function() {
+            grades.push({
+                student_id: $(this).data('student'),
+                grade: $(this).val()
+            });
+        });
+        
+        $.post('api/grades.php', {
+            action: 'save',
+            semester_id: semId,
+            course_id: courseId,
+            grades: grades
+        }, function(res) {
+            var cls = res.success ? 'success' : 'danger';
+            var msg = res.success ? res.saved + ' grade(s) saved successfully.' : res.error;
+            $('#feedback').html('<div class="alert alert-' + cls + '">' + msg + '</div>');
+            setTimeout(function() {
+                $('#feedback').empty();
+            }, 3000);
+        }, 'json');
+    });
+    
+    function buildGradeOptions(selected) {
+        var grades = [
+            ['', '-- Select Grade --'],
+            ['4.0', 'A'],
+            ['3.0', 'B'],
+            ['2.0', 'C'],
+            ['1.0', 'D'],
+            ['0.0', 'F']
+        ];
+        return grades.map(function(g) {
+            return '<option value="' + g[0] + '"' + (g[0] == selected ? ' selected' : '') + '>' + g[1] + '</option>';
+        }).join('');
     }
-    
-    echo json_encode(['success' => true, 'saved' => $saved]);
-    
-} else {
-    http_response_code(400);
-    echo json_encode(['error' => 'Invalid request']);
-}
+});
