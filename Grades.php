@@ -18,7 +18,6 @@
         <h2>Grade Entry System</h2>
         
         <div id="feedback"></div>
-        
         <div class="row mt-4">
             <div class="col-md-4">
                 <label class="form-label">Select Semester</label>
